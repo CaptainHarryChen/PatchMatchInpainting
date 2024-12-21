@@ -244,7 +244,7 @@ if __name__ == "__main__":
     # mask = cv2.imread("test_data/simple.mask.png")
     # mask_color = [255, 255, 255]
     
-    # image = cv2.imread("test_data/magicRoom.png").astype(np.float32)
+    # image = cv2.imread("test_data/magicRoom.png")
     # mask = cv2.imread("test_data/magicRoom.mask.png")
     # mask_color = [0, 255, 0]
     
@@ -259,7 +259,7 @@ if __name__ == "__main__":
     
     # Perform inpainting using pyramid approach
     inpainted_image = pyramid_inpainting(image, mask, patch_size, visual)
-    # inpainted_image = single_inpainting(image, mask, patch_size, iterations=50, visual=visual)
+    # inpainted_image = single_inpainting(image, mask, patch_size, iterations=20, visual=visual)
     
     plt.subplot(1, 2, 1)
     plt.title("Original Image")
