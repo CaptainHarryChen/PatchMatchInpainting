@@ -77,7 +77,7 @@ class PatchMatch:
             target[y, x] = self.source_image[match[1], match[0]]
         return
 
-    def run(self, iterations=5, random_nnf=True, nnf=None):
+    def run(self, iterations=5, visual=False, random_nnf=True, nnf=None):
         """
         Perform inpainting using PatchMatch.
         """
@@ -89,14 +89,15 @@ class PatchMatch:
             self.nnf = nnf
         self.paint_matched(inpainted_image)
         
-        plt.subplot(1, 2, 1)
-        plt.title("Original Image with Hole")
-        plt.imshow(cv2.cvtColor(self.source_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
-        plt.subplot(1, 2, 2)
-        plt.title(f"Inpainted Image - Iteration 0")
-        plt.imshow(cv2.cvtColor(inpainted_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
-        plt.pause(0.01)  # Pause to update the plot
-        plt.clf()  # Clear the figure for the next iteration
+        if visual:
+            plt.subplot(1, 2, 1)
+            plt.title("Original Image with Hole")
+            plt.imshow(cv2.cvtColor(self.source_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
+            plt.subplot(1, 2, 2)
+            plt.title(f"Inpainted Image - Iteration 0")
+            plt.imshow(cv2.cvtColor(inpainted_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
+            plt.pause(0.01)  # Pause to update the plot
+            plt.clf()  # Clear the figure for the next iteration
 
         for it in range(iterations):
             if it % 2 == 0:
@@ -145,25 +146,32 @@ class PatchMatch:
             self.paint_matched(inpainted_image)
             
             # Update plot for each iteration
-            plt.subplot(1, 2, 1)
-            plt.title("Original Image with Hole")
-            plt.imshow(cv2.cvtColor(self.source_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
-            plt.subplot(1, 2, 2)
-            plt.title(f"Inpainted Image - Iteration {it + 1}")
-            plt.imshow(cv2.cvtColor(inpainted_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
-            plt.pause(0.01)  # Pause to update the plot
-            plt.clf()  # Clear the figure for the next iteration
+            if visual:
+                plt.subplot(1, 2, 1)
+                plt.title("Original Image with Hole")
+                plt.imshow(cv2.cvtColor(self.source_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
+                plt.subplot(1, 2, 2)
+                plt.title(f"Inpainted Image - Iteration {it + 1}")
+                plt.imshow(cv2.cvtColor(inpainted_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
+                plt.pause(0.01)  # Pause to update the plot
+                plt.clf()  # Clear the figure for the next iteration
 
         return inpainted_image
 
 
 def donwsample(image, new_height, new_width):
+    '''
+    Downsample the image and mask to new_height x new_width. Using mean pooling.
+    '''
     h, w = image.shape[:2]
     image = image[:new_height * (h // new_height), :new_width * (w // new_width)]
     image = image.reshape(new_height, h // new_height, new_width, w // new_width, -1)
     return image.mean(axis=(1, 3))
 
 def upsample(nnf, new_height, new_width):
+    '''
+    Upsample the nnf to new_height x new_width. Using bilinear interpolation.
+    '''
     h, w = nnf.shape[:2]
     nnf = nnf.astype(np.float32)
     nnf[..., 0] = (nnf[..., 0] + 0.5) * new_width / w - 0.5
@@ -172,24 +180,10 @@ def upsample(nnf, new_height, new_width):
     nnf = np.round(nnf).astype(np.int32)
     return nnf
 
-# Example Usage
-if __name__ == "__main__":
-    # Load image and mask
-    # image = cv2.imread("test_data/simple.png")
-    # mask = cv2.imread("test_data/simple.mask.png")
-    # mask_color = [255, 255, 255]
-    # image = cv2.imread("test_data/magicRoom.png").astype(np.float32)
-    # mask = cv2.imread("test_data/magicRoom.mask.png")
-    # mask_color = [0, 255, 0]
-    image = cv2.imread("test_data/yexinjia.png").astype(np.float32)
-    mask = cv2.imread("test_data/yexinjia.mask.png")
-    mask_color = [255, 0, 0]
-    
-    mask = np.all(mask == mask_color, axis=-1)
-    origin_image = image.copy()
+def pyramid_inpainting(image, mask, patch_size=5, visual=False):
+    image = image.copy().astype(np.float32)
     image[mask] = 0
 
-    patch_size = 5
     h, w = image.shape[:2]
     total_level = 0
     h_list = [h]
@@ -201,7 +195,8 @@ if __name__ == "__main__":
         w_list.append(w)
         total_level += 1
     
-    plt.figure(figsize=(12, 6))
+    if visual:
+        plt.figure(figsize=(12, 6))
     
     tmp_nnf = None
     for level in range(total_level):
@@ -210,18 +205,48 @@ if __name__ == "__main__":
         solver = PatchMatch(tmp_image, tmp_mask, patch_size)
         iterations = 2 * (level + 2) + 1
         if level == 0:
-            inpainted_image = solver.run(iterations, random_nnf=True, nnf=None)
+            inpainted_image = solver.run(iterations=iterations, visual=visual, random_nnf=True, nnf=None)
         else:
-            inpainted_image = solver.run(iterations, random_nnf=False, nnf=tmp_nnf)
+            inpainted_image = solver.run(iterations=iterations, visual=visual, random_nnf=False, nnf=tmp_nnf)
         h = h_list[- level - 2]
         w = w_list[- level - 2]
         tmp_nnf = upsample(solver.nnf, h, w)
-        
+    
+    return inpainted_image.astype(np.uint8)
+
+def single_inpainting(image, mask, patch_size=5, iterations=5, visual=False):
+    solver = PatchMatch(image, mask, patch_size)
+    if visual:
+        plt.figure(figsize=(12, 6))
+    inpainted_image = solver.run(iterations=iterations, visual=visual)
+    return inpainted_image.astype(np.uint8)
+
+
+if __name__ == "__main__":
+    # image = cv2.imread("test_data/simple.png")
+    # mask = cv2.imread("test_data/simple.mask.png")
+    # mask_color = [255, 255, 255]
+    
+    # image = cv2.imread("test_data/magicRoom.png").astype(np.float32)
+    # mask = cv2.imread("test_data/magicRoom.mask.png")
+    # mask_color = [0, 255, 0]
+    
+    image = cv2.imread("test_data/yexinjia.png")
+    mask = cv2.imread("test_data/yexinjia.mask.png")
+    mask_color = [255, 0, 0]
+    
+    mask = np.all(mask == mask_color, axis=-1)
+    
+    visual = True
+    patch_size = 5
+    
+    inpainted_image = pyramid_inpainting(image, mask, patch_size, visual)
+    # inpainted_image = single_inpainting(image, mask, patch_size, iterations=50, visual=visual)
     
     plt.subplot(1, 2, 1)
     plt.title("Original Image")
-    plt.imshow(cv2.cvtColor(origin_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
+    plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     plt.subplot(1, 2, 2)
     plt.title(f"Inpainted Image - Final")
-    plt.imshow(cv2.cvtColor(inpainted_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
+    plt.imshow(cv2.cvtColor(inpainted_image, cv2.COLOR_BGR2RGB))
     plt.show()
