@@ -11,44 +11,35 @@ class PatchMatch:
         self.half_size = patch_size // 2
         self.h, self.w = source_image.shape[:2]
         
+        # Get coordinates of masked pixels. (y, x) format. Because we need traverse the image by row first later in the algorithm.
         self.masked_coords = np.array(np.where(mask == True)).T
         
+        # Create a boolean array indicating valid coordinates
         self.is_valid_coords = np.logical_not(mask)
-        # self.is_valid_coords[:self.half_size] = False
-        # self.is_valid_coords[-self.half_size:] = False
-        # self.is_valid_coords[:, :self.half_size] = False
-        # self.is_valid_coords[:, -self.half_size:] = False
         
-        # for y, x in self.masked_coords:
-        #     self.is_valid_coords[y - self.half_size: y + self.half_size + 1, x - self.half_size: x + self.half_size + 1] = False
-        
+        # Get coordinates of valid pixels. (y, x) format.
         self.valid_coords = np.array(np.where(self.is_valid_coords)).T
         
+        # The nearest neighbor field (NNF)
         self.nnf = None
         
     def coord_in_image(self, x, y):
+        '''Check if coordinates are within image bounds'''
         return x >= 0 and y >= 0 and x < self.w and y < self.h
         
     def patch_in_image(self, x, y):
+        '''Check if patch is within image bounds'''
         return x - self.half_size >= 0 and y - self.half_size >= 0 and x + self.half_size < self.w and y + self.half_size < self.h
 
-    # def patch_in_image(self, coord):
-    #     return self.patch_in_image(coord[0], coord[1])
-    
-    # def patch_has_masked(self, x, y):
-    #     return np.any(self.mask[y - self.half_size: y + self.half_size + 1, x - self.half_size: x + self.half_size + 1])
-    
-    # def patch_has_masked(self, coord):
-    #     return self.patch_has_masked(coord[0], coord[1])
-    
-    # def compute_patch_distance(self, patch_image1, patch_coords1, patch_image2, patch_coords2):
-    #     return np.sum((patch_image1[patch_coords1[1] - self.half_size: patch_coords1[1] + self.half_size + 1, patch_coords1[0] - self.half_size: patch_coords1[0] + self.half_size + 1]
-    #                    - patch_image2[patch_coords2[1] - self.half_size: patch_coords2[1] + self.half_size + 1, patch_coords2[0] - self.half_size: patch_coords2[0] + self.half_size + 1]) ** 2)
-    
     def compute_patch_distance(self, patch_image1, patch_coords1, patch_image2, patch_coords2):
+        '''
+        Compute sum of squared differences between two patches.
+        If patches are out of bounds, pad with zeros.
+        '''
         def get_patch(image, coords):
             x, y = coords
             half_size = self.half_size
+            # Extract patch from image, pad with zeros if out of bounds
             patch = image[max(0, y - half_size): y + half_size + 1, max(0, x - half_size): x + half_size + 1]
             if patch.shape[0] != 2 * half_size + 1 or patch.shape[1] != 2 * half_size + 1:
                 patch = np.pad(patch, ((max(0, half_size - y), max(0, y + half_size + 1 - image.shape[0])),
@@ -56,11 +47,16 @@ class PatchMatch:
                                     (0, 0)), 'constant')
             return patch
 
+        # Get patches from both images
         patch1 = get_patch(patch_image1, patch_coords1)
         patch2 = get_patch(patch_image2, patch_coords2)
+        # Compute sum of squared differences between patches
         return np.sum((patch1 - patch2) ** 2)
 
     def random_initialize_nnf(self):
+        '''
+        Initialize nearest neighbor field (NNF) with random valid coordinates
+        '''
         self.nnf = np.zeros((self.h, self.w, 2), dtype=np.int32)
         for y in range(self.h):
             for x in range(self.w):
@@ -72,20 +68,25 @@ class PatchMatch:
         return
 
     def paint_matched(self, target):
+        '''
+        Paint the target image using the NNF.
+        '''
         for y, x in self.masked_coords:
             match = self.nnf[y, x]
             target[y, x] = self.source_image[match[1], match[0]]
         return
 
     def run(self, iterations=5, visual=False, random_nnf=True, nnf=None):
-        """
+        '''
         Perform inpainting using PatchMatch.
-        """
+        '''
         inpainted_image = self.source_image.copy()
         
+        # Initialize NNF
         if random_nnf:
             self.random_initialize_nnf()
         else:
+            # Using the provided NNF such as the upsampled NNF from the pyramid approach
             self.nnf = nnf
         self.paint_matched(inpainted_image)
         
@@ -99,7 +100,9 @@ class PatchMatch:
             plt.pause(0.01)  # Pause to update the plot
             plt.clf()  # Clear the figure for the next iteration
 
+        # Main iteration
         for it in range(iterations):
+            # Traverse from top-left to bottom-right in even iterations, and from bottom-right to top-left in odd iterations
             if it % 2 == 0:
                 for_list = self.masked_coords
             else:
@@ -111,7 +114,7 @@ class PatchMatch:
                 # Propagation step
                 best_match = self.nnf[y, x]
                 best_distance = self.compute_patch_distance(inpainted_image, current_patch, self.source_image, best_match)
-                
+                # Propagate from left and top neighbors in even iterations, and from right and bottom neighbors in odd iterations
                 if it % 2 == 0:
                     neighbor_list = [(-1, 0), (0, -1)]
                 else:
@@ -119,7 +122,7 @@ class PatchMatch:
                 for dy, dx in neighbor_list:
                     neighbor_x = x + dx
                     neighbor_y = y + dy
-                    
+                    # get the neighbor's neighbor's patch
                     candidate = self.nnf[neighbor_y, neighbor_x] - np.array([dx, dy])
                     if self.coord_in_image(candidate[0], candidate[1]) and self.is_valid_coords[candidate[1], candidate[0]]:
                         distance = self.compute_patch_distance(inpainted_image, current_patch, self.source_image, candidate)
@@ -138,6 +141,7 @@ class PatchMatch:
                         if distance < best_distance:
                             best_match = candidate
                             best_distance = distance
+                    # Reduce search radius by half
                     search_radius //= 2
                 
                 self.nnf[y, x] = best_match
@@ -153,15 +157,15 @@ class PatchMatch:
                 plt.subplot(1, 2, 2)
                 plt.title(f"Inpainted Image - Iteration {it + 1}")
                 plt.imshow(cv2.cvtColor(inpainted_image.astype(np.uint8), cv2.COLOR_BGR2RGB))
+                plt.draw()  # Draw the updated plot
                 plt.pause(0.01)  # Pause to update the plot
-                plt.clf()  # Clear the figure for the next iteration
 
         return inpainted_image
 
 
-def donwsample(image, new_height, new_width):
+def downsample(image, new_height, new_width):
     '''
-    Downsample the image and mask to new_height x new_width. Using mean pooling.
+    Downsample the image and mask to new_height x new_width using mean pooling.
     '''
     h, w = image.shape[:2]
     image = image[:new_height * (h // new_height), :new_width * (w // new_width)]
@@ -170,7 +174,7 @@ def donwsample(image, new_height, new_width):
 
 def upsample(nnf, new_height, new_width):
     '''
-    Upsample the nnf to new_height x new_width. Using bilinear interpolation.
+    Upsample the nnf to new_height x new_width using bilinear interpolation.
     '''
     h, w = nnf.shape[:2]
     nnf = nnf.astype(np.float32)
@@ -181,9 +185,13 @@ def upsample(nnf, new_height, new_width):
     return nnf
 
 def pyramid_inpainting(image, mask, patch_size=5, visual=False):
+    '''
+    Perform inpainting using a pyramid approach.
+    '''
     image = image.copy().astype(np.float32)
     image[mask] = 0
 
+    # Construct the size pyramid
     h, w = image.shape[:2]
     total_level = 0
     h_list = [h]
@@ -200,14 +208,17 @@ def pyramid_inpainting(image, mask, patch_size=5, visual=False):
     
     tmp_nnf = None
     for level in range(total_level):
-        tmp_image = donwsample(image, h, w)
-        tmp_mask = donwsample(mask, h, w).squeeze(-1).astype(np.bool)
+        # Downsample the image and mask
+        tmp_image = downsample(image, h, w)
+        tmp_mask = downsample(mask, h, w).squeeze(-1).astype(np.bool)
+        # Perform inpainting at the current level
         solver = PatchMatch(tmp_image, tmp_mask, patch_size)
         iterations = 2 * (level + 2) + 1
         if level == 0:
             inpainted_image = solver.run(iterations=iterations, visual=visual, random_nnf=True, nnf=None)
         else:
             inpainted_image = solver.run(iterations=iterations, visual=visual, random_nnf=False, nnf=tmp_nnf)
+        # Upsample the NNF to the next level
         h = h_list[- level - 2]
         w = w_list[- level - 2]
         tmp_nnf = upsample(solver.nnf, h, w)
@@ -215,6 +226,9 @@ def pyramid_inpainting(image, mask, patch_size=5, visual=False):
     return inpainted_image.astype(np.uint8)
 
 def single_inpainting(image, mask, patch_size=5, iterations=5, visual=False):
+    '''
+    Perform inpainting using a single resolution.
+    '''
     solver = PatchMatch(image, mask, patch_size)
     if visual:
         plt.figure(figsize=(12, 6))
@@ -222,7 +236,10 @@ def single_inpainting(image, mask, patch_size=5, iterations=5, visual=False):
     return inpainted_image.astype(np.uint8)
 
 
+
 if __name__ == "__main__":
+    # Load image and mask
+    
     # image = cv2.imread("test_data/simple.png")
     # mask = cv2.imread("test_data/simple.mask.png")
     # mask_color = [255, 255, 255]
@@ -240,6 +257,7 @@ if __name__ == "__main__":
     visual = True
     patch_size = 5
     
+    # Perform inpainting using pyramid approach
     inpainted_image = pyramid_inpainting(image, mask, patch_size, visual)
     # inpainted_image = single_inpainting(image, mask, patch_size, iterations=50, visual=visual)
     
